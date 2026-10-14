@@ -33,6 +33,7 @@ type Event struct {
 	Status  string
 	Name    string
 	Text    string
+	Local   bool // true for messages sent by this node
 }
 
 type packet struct {
@@ -349,7 +350,7 @@ func (n *Node) deliver(msg packet, source *peer) {
 	if msg.Type == "action" {
 		kind = "action"
 	}
-	n.emit(Event{Kind: kind, Name: msg.Name, Text: msg.Text})
+	n.emit(Event{Kind: kind, Name: msg.Name, Text: msg.Text, Local: source == nil})
 }
 
 // remember must be called with n.mu held.
