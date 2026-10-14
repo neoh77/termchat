@@ -183,6 +183,133 @@ func TestDisconnectUpdatesPeerStatus(t *testing.T) {
 	}
 }
 
+func waitForPeerStatus(t *testing.T, n *Node, status string) Event {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case event := <-n.Events:
+			if event.Kind == "peer" && event.Status == status {
+				return event
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for %q on %s", status, n.Name)
+		}
+	}
+}
+
+func TestReconnectAfterPeerRestart(t *testing.T) {
+	client := newTestNode(t, "client")
+	client.retryFor, client.retryIn = 2*time.Second, 25*time.Millisecond
+	host := newTestNode(t, "host")
+	address := fmt.Sprintf("127.0.0.1:%d", host.Port)
+	if err := client.AddPeer(address); err != nil {
+		t.Fatal(err)
+	}
+	await(t, client, "peer")
+	await(t, host, "peer")
+	host.Close()
+	waitForPeerStatus(t, client, "disconnected")
+	waitForPeerStatus(t, client, "reconnecting")
+	restarted, err := New("host", host.Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restarted.Close)
+	await(t, client, "peer")
+	await(t, restarted, "peer")
+	if err := restarted.Send("back online"); err != nil {
+		t.Fatal(err)
+	}
+	if msg := await(t, client, "message"); msg.Text != "back online" || msg.Name != "host" {
+		t.Fatalf("reconnected client received %+v", msg)
+	}
+	// Re-adding an already managed address must not open duplicate connections.
+	if err := client.AddPeer(address); err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	connections := len(client.peers)
+	client.mu.Unlock()
+	if connections != 1 {
+		t.Fatalf("client has %d connections to host; want 1", connections)
+	}
+}
+
+func TestRetryInitialFailureAndTimeout(t *testing.T) {
+	client := newTestNode(t, "client")
+	client.retryFor, client.retryIn = 2*time.Second, 25*time.Millisecond
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	address := fmt.Sprintf("127.0.0.1:%d", port)
+	if err := client.AddPeer(address); err != nil {
+		t.Fatal(err)
+	}
+	waitForPeerStatus(t, client, "reconnecting")
+	host, err := New("host", port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(host.Close)
+	await(t, client, "peer")
+
+	timeoutClient := newTestNode(t, "timeout")
+	timeoutClient.retryFor, timeoutClient.retryIn = 150*time.Millisecond, 20*time.Millisecond
+	unused, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreachable := unused.Addr().String()
+	unused.Close()
+	if err := timeoutClient.AddPeer(unreachable); err != nil {
+		t.Fatal(err)
+	}
+	waitForPeerStatus(t, timeoutClient, "failed: reconnect timed out")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		timeoutClient.mu.Lock()
+		_, retrying := timeoutClient.outgoing[unreachable]
+		timeoutClient.mu.Unlock()
+		if !retrying {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("retry worker was not released after timing out")
+}
+
+func TestCloseStopsReconnect(t *testing.T) {
+	client := newTestNode(t, "client")
+	client.retryFor, client.retryIn = 2*time.Second, 25*time.Millisecond
+	unused, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreachable := unused.Addr().String()
+	unused.Close()
+	if err := client.AddPeer(unreachable); err != nil {
+		t.Fatal(err)
+	}
+	waitForPeerStatus(t, client, "reconnecting")
+	client.Close()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		client.mu.Lock()
+		active := len(client.outgoing)
+		client.mu.Unlock()
+		if active == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("retry worker did not stop after close")
+}
+
 func waitForMembers(t *testing.T, n *Node, others ...*Node) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

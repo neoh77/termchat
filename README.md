@@ -28,6 +28,8 @@ The status bar shows the release version (for example, `v0.1.2`). Binaries built
 
 Messages travel both ways once connected. To add someone while running, press **Ctrl+A**, type their IP (or `IP:port`), and press **Enter**. Members share their nicknames and IP:port addresses with the whole connected group, so everyone sees new arrivals. A member is marked **direct** when you have a TCP connection to them and **via group** when their messages are forwarded through another member. Members who leave disappear after approximately 20 seconds without an update. Address sharing does not automatically open new connections.
 
+Connections you initiate (with `--peer` or Ctrl+A) automatically retry every few seconds for up to 60 seconds after a disconnect or an initial connection failure. The Members panel shows **reconnecting** while retrying and a failure if the window expires; you can then try again with Ctrl+A. Connections that were only accepted from another member do not dial back. A member may briefly disappear during a longer restart, and messages sent while disconnected are not replayed.
+
 Type `/me waves` to send an action, displayed to everyone as `* alice waves` (using your nickname). Type `/update` to check the latest GitHub release and install its `termchat` binary if it is newer; restart termchat to use the update. This manual update requires internet access and a writable installation directory and is available for Linux amd64. Locally built `dev` binaries install the latest release when `/update` is used. The current binary is kept if the download or installation fails.
 
 The Chat pane title shows how many new messages or actions have arrived from other members since your last key interaction. Typing or using a shortcut clears the count; messages you send do not add to it.
@@ -42,7 +44,7 @@ The TUI shows your local `10.*` or `192.*` IPv4 address and actual listening por
 | Esc | Cancel peer entry |
 | Ctrl+Q | Quit |
 
-Use `--peer` more than once to connect to several addresses on startup. The Members panel shows participants across the group and connection failures; failed connections can be retried with Ctrl+A. Run the same version of termchat on each machine so membership updates use the same protocol.
+Use `--peer` more than once to connect to several addresses on startup. The Members panel shows participants across the group and connection failures. Run the same version of termchat on each machine so membership updates use the same protocol.
 
 ## Ports and connectivity
 

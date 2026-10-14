@@ -24,6 +24,8 @@ const (
 	maxMembers   = 256
 	memberTTL    = 20 * time.Second
 	refreshEvery = 5 * time.Second
+	retryWindow  = 60 * time.Second
+	retryEvery   = 3 * time.Second
 )
 
 type Event struct {
@@ -75,6 +77,9 @@ type Node struct {
 	members  map[string]memberInfo
 	seen     map[string]struct{}
 	seenList []string
+	outgoing map[string]struct{}
+	retryFor time.Duration
+	retryIn  time.Duration
 }
 
 func New(name string, port int) (*Node, error) {
@@ -107,6 +112,7 @@ func New(name string, port int) (*Node, error) {
 		Events: make(chan Event, 1024), id: id,
 		listener: listener, ctx: ctx, cancel: cancel,
 		peers: make(map[*peer]struct{}), members: make(map[string]memberInfo), seen: make(map[string]struct{}),
+		outgoing: make(map[string]struct{}), retryFor: retryWindow, retryIn: retryEvery,
 	}
 	go n.accept()
 	go n.refreshMembers()
@@ -164,16 +170,63 @@ func (n *Node) AddPeer(address string) error {
 	if err != nil {
 		return err
 	}
+	n.mu.Lock()
+	if n.ctx.Err() != nil {
+		n.mu.Unlock()
+		return errors.New("node is closed")
+	}
+	if _, exists := n.outgoing[addr]; exists {
+		n.mu.Unlock()
+		return nil
+	}
+	n.outgoing[addr] = struct{}{}
+	n.mu.Unlock()
 	n.emit(Event{Kind: "peer", Address: addr, Status: "connecting"})
-	go func() {
-		conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(n.ctx, "tcp", addr)
-		if err != nil {
-			n.emit(Event{Kind: "peer", Address: addr, Status: "failed: " + Clean(err.Error())})
+	go n.connectWithRetry(addr)
+	return nil
+}
+
+func (n *Node) connectWithRetry(addr string) {
+	defer func() {
+		n.mu.Lock()
+		delete(n.outgoing, addr)
+		n.mu.Unlock()
+	}()
+	deadline := time.Now().Add(n.retryFor)
+	for {
+		if n.ctx.Err() != nil {
 			return
 		}
-		n.handle(conn, addr)
-	}()
-	return nil
+		attemptDeadline := time.Now().Add(5 * time.Second)
+		if deadline.Before(attemptDeadline) {
+			attemptDeadline = deadline
+		}
+		attempt, cancel := context.WithDeadline(n.ctx, attemptDeadline)
+		conn, err := (&net.Dialer{}).DialContext(attempt, "tcp", addr)
+		cancel()
+		if err == nil {
+			connected, _ := n.handle(conn, addr, attemptDeadline)
+			if connected {
+				// A later disconnect gets a fresh window, even after a long session.
+				deadline = time.Now().Add(n.retryFor)
+			}
+		}
+		if n.ctx.Err() != nil {
+			return
+		}
+		if time.Until(deadline) <= 0 {
+			n.emit(Event{Kind: "peer", Address: addr, Status: "failed: reconnect timed out"})
+			return
+		}
+		n.emit(Event{Kind: "peer", Address: addr, Status: "reconnecting"})
+		timer := time.NewTimer(min(n.retryIn, time.Until(deadline)))
+		select {
+		case <-timer.C:
+		case <-n.ctx.Done():
+			timer.Stop()
+			return
+		}
+	}
 }
 
 func (n *Node) accept() {
@@ -182,28 +235,27 @@ func (n *Node) accept() {
 		if err != nil {
 			return
 		}
-		go n.handle(conn, "")
+		go n.handle(conn, "", time.Now().Add(5*time.Second))
 	}
 }
 
-func (n *Node) handle(conn net.Conn, address string) {
+func (n *Node) handle(conn net.Conn, address string, handshakeDeadline time.Time) (bool, error) {
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	stopClose := context.AfterFunc(n.ctx, func() { conn.Close() })
+	defer stopClose()
+	conn.SetDeadline(handshakeDeadline)
 	encoder := json.NewEncoder(conn)
 	if err := encoder.Encode(packet{Type: "hello", ID: n.id, Name: n.Name, Port: n.Port}); err != nil {
-		n.failed(address, err)
-		return
+		return false, err
 	}
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 4096), maxFrame)
 	if !scanner.Scan() {
-		n.failed(address, scanner.Err())
-		return
+		return false, scanner.Err()
 	}
 	var hello packet
 	if err := json.Unmarshal(scanner.Bytes(), &hello); err != nil || hello.Type != "hello" || !validID(hello.ID) || hello.ID == n.id || hello.Port < 1 || hello.Port > 65535 || len(hello.Name) > 32 || Clean(hello.Name) == "" {
-		n.failed(address, errors.New("invalid peer handshake (or own address)"))
-		return
+		return false, errors.New("invalid peer handshake (or own address)")
 	}
 	if address == "" {
 		host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
@@ -296,16 +348,7 @@ readLoop:
 	if !remaining {
 		n.emit(Event{Kind: "peer", Address: address, Status: "disconnected"})
 	}
-}
-
-func (n *Node) failed(address string, err error) {
-	if address != "" {
-		message := "connection closed"
-		if err != nil {
-			message = Clean(err.Error())
-		}
-		n.emit(Event{Kind: "peer", Address: address, Status: "failed: " + message})
-	}
+	return true, nil
 }
 
 func (n *Node) Send(text string) error {
