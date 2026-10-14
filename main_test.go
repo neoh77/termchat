@@ -139,3 +139,39 @@ func TestMeCommandAndActionDisplay(t *testing.T) {
 	default:
 	}
 }
+
+func TestNewMessageCount(t *testing.T) {
+	m := newModel(&chat.Node{Name: "alice", Port: 8085})
+	m.width, m.height = 80, 24
+	for _, event := range []networkEvent{
+		{Kind: "message", Name: "bob", Text: "hi"},
+		{Kind: "action", Name: "bob", Text: "waves"},
+		{Kind: "message", Name: "alice", Text: "mine", Local: true},
+	} {
+		updated, _ := m.Update(event)
+		m = updated.(model)
+	}
+	if m.newMessages != 2 || !strings.Contains(ansi.Strip(m.View()), "Chat (2 new)") {
+		t.Fatalf("expected two new messages: count %d, view %s", m.newMessages, m.View())
+	}
+	for _, event := range []tea.Msg{
+		tea.WindowSizeMsg{Width: 80, Height: 24},
+		networkEvent{Kind: "peer", Address: "127.0.0.1:8085", Status: "connected (bob)"},
+	} {
+		updated, _ := m.Update(event)
+		m = updated.(model)
+	}
+	if m.newMessages != 2 {
+		t.Fatalf("non-key events cleared the count: %d", m.newMessages)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m = updated.(model)
+	if m.newMessages != 0 || strings.Contains(ansi.Strip(m.View()), "Chat (2 new)") {
+		t.Fatalf("key interaction did not clear new messages: count %d, view %s", m.newMessages, m.View())
+	}
+	updated, _ = m.Update(networkEvent{Kind: "message", Name: "bob", Text: "again"})
+	m = updated.(model)
+	if m.newMessages != 1 || !strings.Contains(ansi.Strip(m.View()), "Chat (1 new)") {
+		t.Fatalf("new messages did not resume counting: count %d, view %s", m.newMessages, m.View())
+	}
+}

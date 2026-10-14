@@ -128,7 +128,7 @@ func TestForwardsAcrossIndirectPeer(t *testing.T) {
 	if err := a.Send("through bob"); err != nil {
 		t.Fatal(err)
 	}
-	if msg := await(t, c, "message"); msg.Name != "alice" || msg.Text != "through bob" {
+	if msg := await(t, c, "message"); msg.Name != "alice" || msg.Text != "through bob" || msg.Local {
 		t.Fatalf("indirect peer received %+v", msg)
 	}
 }
@@ -151,7 +151,7 @@ func TestActionForwardsAcrossIndirectPeer(t *testing.T) {
 	}
 	for _, n := range []*Node{a, b, c} {
 		msg := await(t, n, "action")
-		if msg.Name != "alice" || msg.Text != "waves hello" {
+		if msg.Name != "alice" || msg.Text != "waves hello" || msg.Local != (n == a) {
 			t.Errorf("%s received %+v", n.Name, msg)
 		}
 	}

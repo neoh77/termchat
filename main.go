@@ -50,6 +50,7 @@ type model struct {
 	members     map[string]memberView
 	memberOrder []string
 	peerScroll  int
+	newMessages int
 	notice      string
 	localIPs    []string
 	version     string
@@ -123,6 +124,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		event := chat.Event(msg)
 		switch event.Kind {
 		case "message", "action":
+			if !event.Local {
+				m.newMessages++
+			}
 			line := event.Name + ": " + event.Text
 			if event.Kind == "action" {
 				line = "* " + event.Name + " " + event.Text
@@ -155,6 +159,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.waitEvent
 	case tea.KeyMsg:
+		m.newMessages = 0
 		switch msg.String() {
 		case "ctrl+q", "ctrl+c":
 			return m, tea.Quit
@@ -295,13 +300,17 @@ func (m model) View() string {
 		peerLines = append(peerLines, "Ctrl+A to add a member")
 	}
 	paneHeight := m.height - 5
+	chatLabel := "Chat"
+	if m.newMessages > 0 {
+		chatLabel = fmt.Sprintf("Chat (%d new)", m.newMessages)
+	}
 	var panes string
 	if m.width >= 72 {
 		panes = lipgloss.JoinHorizontal(lipgloss.Top,
-			pane("Chat", m.messages, m.width-30, paneHeight),
+			pane(chatLabel, m.messages, m.width-30, paneHeight),
 			paneWithScroll(fmt.Sprintf("Members (%d)", len(m.members)), peerLines, 30, paneHeight, m.peerScroll))
 	} else {
-		panes = paneWithScroll(fmt.Sprintf("Members (%d)", len(m.members)), peerLines, m.width, 5, m.peerScroll) + "\n" + pane("Chat", m.messages, m.width, paneHeight-5)
+		panes = paneWithScroll(fmt.Sprintf("Members (%d)", len(m.members)), peerLines, m.width, 5, m.peerScroll) + "\n" + pane(chatLabel, m.messages, m.width, paneHeight-5)
 	}
 	status := m.notice
 	if status == "" {
