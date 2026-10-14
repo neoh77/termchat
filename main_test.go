@@ -89,3 +89,53 @@ func TestMembersPanelShowsLateJoinAndScrolls(t *testing.T) {
 		t.Fatalf("older member is not reachable by scrolling: %s", view)
 	}
 }
+
+func TestMeCommandAndActionDisplay(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	n, err := chat.New("alice", port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(n.Close)
+	m := newModel(n)
+	m.width, m.height = 100, 24
+	for _, tc := range []struct {
+		input, kind, text string
+	}{
+		{"/me waves", "action", "waves"},
+		{"/me   dances", "action", "dances"},
+		{"/meow", "message", "/meow"},
+	} {
+		m.input.SetValue(tc.input)
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(model)
+		if m.input.Value() != "" {
+			t.Fatalf("input was not cleared after %q", tc.input)
+		}
+		event := <-n.Events
+		if event.Kind != tc.kind || event.Text != tc.text {
+			t.Fatalf("%q produced %+v; want %s %q", tc.input, event, tc.kind, tc.text)
+		}
+		updated, _ = m.Update(networkEvent(event))
+		m = updated.(model)
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "* alice waves") || !strings.Contains(view, "alice: /meow") {
+		t.Fatalf("actions and ordinary chat are not displayed correctly: %s", view)
+	}
+	m.input.SetValue("/me")
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if m.notice == "" || m.input.Value() != "/me" {
+		t.Fatalf("empty action should show an error and retain input: %+v", m)
+	}
+	select {
+	case event := <-n.Events:
+		t.Fatalf("empty action sent event %+v", event)
+	default:
+	}
+}

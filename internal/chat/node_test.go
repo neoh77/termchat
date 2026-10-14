@@ -133,6 +133,33 @@ func TestForwardsAcrossIndirectPeer(t *testing.T) {
 	}
 }
 
+func TestActionForwardsAcrossIndirectPeer(t *testing.T) {
+	a := newTestNode(t, "alice")
+	b := newTestNode(t, "bob")
+	c := newTestNode(t, "charlie")
+	if err := a.AddPeer(fmt.Sprintf("127.0.0.1:%d", b.Port)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.AddPeer(fmt.Sprintf("127.0.0.1:%d", c.Port)); err != nil {
+		t.Fatal(err)
+	}
+	waitForMembers(t, a, b, c)
+	waitForMembers(t, b, a, c)
+	waitForMembers(t, c, a, b)
+	if err := a.SendAction("waves hello"); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []*Node{a, b, c} {
+		msg := await(t, n, "action")
+		if msg.Name != "alice" || msg.Text != "waves hello" {
+			t.Errorf("%s received %+v", n.Name, msg)
+		}
+	}
+	if err := a.SendAction("   "); err == nil {
+		t.Fatal("empty action should fail")
+	}
+}
+
 func TestDisconnectUpdatesPeerStatus(t *testing.T) {
 	a := newTestNode(t, "alice")
 	b := newTestNode(t, "bob")

@@ -28,6 +28,10 @@ func (p *peerFlags) Set(value string) error {
 
 type networkEvent chat.Event
 
+type updateResult struct {
+	notice string
+}
+
 type memberView struct {
 	name    string
 	address string
@@ -37,6 +41,7 @@ type model struct {
 	node        *chat.Node
 	input       textinput.Model
 	adding      bool
+	updating    bool
 	width       int
 	height      int
 	messages    []string
@@ -108,14 +113,21 @@ func (m model) Init() tea.Cmd { return m.waitEvent }
 
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
+	case updateResult:
+		m.updating = false
+		m.notice = msg.notice
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.input.Width = max(10, msg.Width-len(m.input.Prompt)-2)
 	case networkEvent:
 		event := chat.Event(msg)
 		switch event.Kind {
-		case "message":
-			m.messages = append(m.messages, event.Name+": "+event.Text)
+		case "message", "action":
+			line := event.Name + ": " + event.Text
+			if event.Kind == "action" {
+				line = "* " + event.Name + " " + event.Text
+			}
+			m.messages = append(m.messages, line)
 			if len(m.messages) > 1000 {
 				m.messages = m.messages[len(m.messages)-1000:]
 			}
@@ -185,7 +197,29 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.input.SetValue("")
 				}
 			} else if strings.TrimSpace(value) != "" {
-				if err := m.node.Send(value); err != nil {
+				if strings.TrimSpace(value) == "/update" {
+					if m.updating {
+						m.notice = "Update already in progress"
+						return m, nil
+					}
+					m.updating = true
+					m.notice = "Checking for updates…"
+					m.input.SetValue("")
+					return m, func() tea.Msg {
+						result, err := updateInstalled()
+						if err != nil {
+							return updateResult{notice: "Update failed: " + chat.Clean(err.Error())}
+						}
+						return updateResult{notice: result}
+					}
+				}
+				var err error
+				if value == "/me" || strings.HasPrefix(value, "/me ") || strings.HasPrefix(value, "/me\t") {
+					err = m.node.SendAction(strings.TrimSpace(value[len("/me"):]))
+				} else {
+					err = m.node.Send(value)
+				}
+				if err != nil {
 					m.notice = err.Error()
 				} else {
 					m.input.SetValue("")

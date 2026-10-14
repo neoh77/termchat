@@ -28,11 +28,13 @@ The status bar shows the release version (for example, `v0.1.2`). Binaries built
 
 Messages travel both ways once connected. To add someone while running, press **Ctrl+A**, type their IP (or `IP:port`), and press **Enter**. Members share their nicknames and IP:port addresses with the whole connected group, so everyone sees new arrivals. A member is marked **direct** when you have a TCP connection to them and **via group** when their messages are forwarded through another member. Members who leave disappear after approximately 20 seconds without an update. Address sharing does not automatically open new connections.
 
+Type `/me waves` to send an action, displayed to everyone as `* alice waves` (using your nickname). Type `/update` to check the latest GitHub release and install its `termchat` binary if it is newer; restart termchat to use the update. This manual update requires internet access and a writable installation directory and is available for Linux amd64. Locally built `dev` binaries install the latest release when `/update` is used. The current binary is kept if the download or installation fails.
+
 The TUI shows your local `10.*` or `192.*` IPv4 address and actual listening port to share with other members. If multiple matching interfaces exist, it lists their addresses; choose one reachable by your peers.
 
 | Key | Action |
 | --- | --- |
-| Enter | Send a message, or connect to the entered peer |
+| Enter | Send a message or `/me` action, run `/update`, or connect to the entered peer |
 | Ctrl+A | Enter a peer IP address |
 | PgUp / PgDn | Scroll through members |
 | Esc | Cancel peer entry |

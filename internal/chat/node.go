@@ -27,7 +27,7 @@ const (
 )
 
 type Event struct {
-	Kind    string // message, peer, or member
+	Kind    string // message, action, peer, or member
 	ID      string
 	Address string
 	Status  string
@@ -259,7 +259,7 @@ readLoop:
 			break
 		}
 		switch msg.Type {
-		case "chat":
+		case "chat", "action":
 			if !validID(msg.ID) || len(msg.Name) > 32 || Clean(msg.Name) == "" || len(msg.Text) > maxText || Clean(msg.Text) == "" {
 				break readLoop
 			}
@@ -308,6 +308,15 @@ func (n *Node) failed(address string, err error) {
 }
 
 func (n *Node) Send(text string) error {
+	return n.send("chat", text)
+}
+
+// SendAction broadcasts an IRC-style action attributed to this node.
+func (n *Node) SendAction(text string) error {
+	return n.send("action", text)
+}
+
+func (n *Node) send(kind, text string) error {
 	text = Clean(text)
 	if text == "" || len(text) > maxText {
 		return fmt.Errorf("message must be 1–%d bytes", maxText)
@@ -316,7 +325,7 @@ func (n *Node) Send(text string) error {
 	if err != nil {
 		return err
 	}
-	n.deliver(packet{Type: "chat", ID: id, Name: n.Name, Text: text}, nil)
+	n.deliver(packet{Type: kind, ID: id, Name: n.Name, Text: text}, nil)
 	return nil
 }
 
@@ -336,7 +345,11 @@ func (n *Node) deliver(msg packet, source *peer) {
 		}
 	}
 	n.mu.Unlock()
-	n.emit(Event{Kind: "message", Name: msg.Name, Text: msg.Text})
+	kind := "message"
+	if msg.Type == "action" {
+		kind = "action"
+	}
+	n.emit(Event{Kind: kind, Name: msg.Name, Text: msg.Text})
 }
 
 // remember must be called with n.mu held.
