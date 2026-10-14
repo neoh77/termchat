@@ -1,0 +1,10 @@
+# Local builds and test artifacts
+/termchat
+/dist/
+*.test
+*.out
+coverage.*
+
+# Editor and OS files
+.DS_Store
+*.swp
