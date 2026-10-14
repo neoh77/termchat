@@ -155,3 +155,131 @@ func TestDisconnectUpdatesPeerStatus(t *testing.T) {
 		}
 	}
 }
+
+func waitForMembers(t *testing.T, n *Node, others ...*Node) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		n.mu.Lock()
+		found := true
+		for _, other := range others {
+			member, ok := n.members[other.id]
+			if !ok || member.name != other.Name || member.address != fmt.Sprintf("127.0.0.1:%d", other.Port) {
+				found = false
+				break
+			}
+		}
+		n.mu.Unlock()
+		if found {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s did not learn all group members", n.Name)
+}
+
+func TestLateJoinSharesMembersAcrossGroup(t *testing.T) {
+	a := newTestNode(t, "alice")
+	b := newTestNode(t, "bob")
+	c := newTestNode(t, "charlie")
+	d := newTestNode(t, "dana")
+	for _, edge := range []struct{ from, to *Node }{{a, b}, {b, c}} {
+		if err := edge.from.AddPeer(fmt.Sprintf("127.0.0.1:%d", edge.to.Port)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitForMembers(t, a, b, c)
+	waitForMembers(t, c, a, b)
+	if err := d.AddPeer(fmt.Sprintf("127.0.0.1:%d", c.Port)); err != nil {
+		t.Fatal(err)
+	}
+	waitForMembers(t, a, b, c, d)
+	waitForMembers(t, b, a, c, d)
+	waitForMembers(t, c, a, b, d)
+	waitForMembers(t, d, a, b, c)
+
+	// Visibility does not create new TCP connections across the group.
+	a.mu.Lock()
+	connections := len(a.peers)
+	a.mu.Unlock()
+	if connections != 1 {
+		t.Fatalf("alice has %d direct connections; want 1", connections)
+	}
+	if err := d.Send("hi from dana"); err != nil {
+		t.Fatal(err)
+	}
+	if msg := await(t, a, "message"); msg.Name != "dana" || msg.Text != "hi from dana" {
+		t.Fatalf("alice received %+v", msg)
+	}
+}
+
+func TestDepartedMemberExpires(t *testing.T) {
+	a := newTestNode(t, "alice")
+	b := newTestNode(t, "bob")
+	if err := a.AddPeer(fmt.Sprintf("127.0.0.1:%d", b.Port)); err != nil {
+		t.Fatal(err)
+	}
+	waitForMembers(t, a, b)
+	b.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		connected := len(a.peers) != 0
+		a.mu.Unlock()
+		if !connected {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	a.expireMembers(time.Now().Add(memberTTL + time.Second))
+	a.mu.Lock()
+	_, present := a.members[b.id]
+	a.mu.Unlock()
+	if present {
+		t.Fatal("departed member should have expired")
+	}
+	for {
+		select {
+		case event := <-a.Events:
+			if event.Kind == "member" && event.ID == b.id && event.Status == "left" {
+				return
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("member departure was not reported")
+		}
+	}
+}
+
+func TestIndirectMemberExpiresAfterLeaving(t *testing.T) {
+	a := newTestNode(t, "alice")
+	b := newTestNode(t, "bob")
+	c := newTestNode(t, "charlie")
+	if err := a.AddPeer(fmt.Sprintf("127.0.0.1:%d", b.Port)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.AddPeer(fmt.Sprintf("127.0.0.1:%d", c.Port)); err != nil {
+		t.Fatal(err)
+	}
+	waitForMembers(t, a, b, c)
+	c.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		b.mu.Lock()
+		connected := false
+		for p := range b.peers {
+			connected = connected || p.id == c.id
+		}
+		b.mu.Unlock()
+		if !connected {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	a.expireMembers(time.Now().Add(memberTTL + time.Second))
+	a.mu.Lock()
+	_, present := a.members[c.id]
+	a.mu.Unlock()
+	if present {
+		t.Fatal("indirect member should expire when they stop sending updates")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"termchat/internal/chat"
@@ -60,5 +61,31 @@ func TestViewKeepsVersionVisibleWithNotice(t *testing.T) {
 	view := ansi.Strip(m.View())
 	if !strings.Contains(view, version+" · connection") {
 		t.Fatalf("version is not visible with a notice: %s", view)
+	}
+}
+
+func TestMembersPanelShowsLateJoinAndScrolls(t *testing.T) {
+	m := newModel(&chat.Node{Name: "alice", Port: 8085})
+	m.width, m.height = 40, 13
+	for _, member := range []struct{ id, name, address string }{
+		{"bob", "bob", "10.0.0.2:8085"},
+		{"charlie", "charlie", "10.0.0.3:8085"},
+		{"dana", "dana", "10.0.0.4:8085"},
+	} {
+		updated, _ := m.Update(networkEvent{Kind: "member", ID: member.id, Name: member.name, Address: member.address, Status: "present"})
+		m = updated.(model)
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "dana · via group") || !strings.Contains(view, "Members (3)") {
+		t.Fatalf("new member is missing: %s", view)
+	}
+	updated, _ := m.Update(networkEvent{Kind: "peer", Address: "10.0.0.4:8085", Status: "connected (dana)"})
+	m = updated.(model)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "dana · direct") {
+		t.Fatalf("direct member is not identified: %s", view)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = updated.(model)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "bob · via group") {
+		t.Fatalf("older member is not reachable by scrolling: %s", view)
 	}
 }

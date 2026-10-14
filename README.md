@@ -26,7 +26,7 @@ The status bar shows the release version (for example, `v0.1.2`). Binaries built
 ./termchat --name bob --peer 192.168.1.10
 ```
 
-Messages travel both ways once connected. To add someone while running, press **Ctrl+A**, type their IP (or `IP:port`), and press **Enter**. Peers in a connected group forward messages to one another, so every member doesn't have to enter every other member's address.
+Messages travel both ways once connected. To add someone while running, press **Ctrl+A**, type their IP (or `IP:port`), and press **Enter**. Members share their nicknames and IP:port addresses with the whole connected group, so everyone sees new arrivals. A member is marked **direct** when you have a TCP connection to them and **via group** when their messages are forwarded through another member. Members who leave disappear after approximately 20 seconds without an update. Address sharing does not automatically open new connections.
 
 The TUI shows your local `10.*` or `192.*` IPv4 address and actual listening port to share with other members. If multiple matching interfaces exist, it lists their addresses; choose one reachable by your peers.
 
@@ -34,10 +34,11 @@ The TUI shows your local `10.*` or `192.*` IPv4 address and actual listening por
 | --- | --- |
 | Enter | Send a message, or connect to the entered peer |
 | Ctrl+A | Enter a peer IP address |
+| PgUp / PgDn | Scroll through members |
 | Esc | Cancel peer entry |
 | Ctrl+Q | Quit |
 
-Use `--peer` more than once to connect to several addresses on startup. The Peers panel shows connection status, including incoming peers. Connections that fail can be retried with Ctrl+A.
+Use `--peer` more than once to connect to several addresses on startup. The Members panel shows participants across the group and connection failures; failed connections can be retried with Ctrl+A. Run the same version of termchat on each machine so membership updates use the same protocol.
 
 ## Ports and connectivity
 

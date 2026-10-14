@@ -21,10 +21,14 @@ const (
 	maxText      = 4096
 	maxFrame     = 8192
 	maxSeen      = 8192
+	maxMembers   = 256
+	memberTTL    = 20 * time.Second
+	refreshEvery = 5 * time.Second
 )
 
 type Event struct {
-	Kind    string // message, peer, or error
+	Kind    string // message, peer, or member
+	ID      string
 	Address string
 	Status  string
 	Name    string
@@ -32,17 +36,27 @@ type Event struct {
 }
 
 type packet struct {
-	Type string `json:"type"`
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
-	Text string `json:"text,omitempty"`
-	Port int    `json:"port,omitempty"`
+	Type    string `json:"type"`
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Port    int    `json:"port,omitempty"`
+	Address string `json:"address,omitempty"`
+	Token   string `json:"token,omitempty"`
 }
 
 type peer struct {
 	conn net.Conn
 	addr string
+	id   string
+	name string
 	out  chan packet
+}
+
+type memberInfo struct {
+	name    string
+	address string
+	seen    time.Time
 }
 
 // Node is one participant in a single, forwarded chat room.
@@ -57,6 +71,7 @@ type Node struct {
 	cancel   context.CancelFunc
 	mu       sync.Mutex
 	peers    map[*peer]struct{}
+	members  map[string]memberInfo
 	seen     map[string]struct{}
 	seenList []string
 }
@@ -80,20 +95,37 @@ func New(name string, port int) (*Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
-	idBytes := make([]byte, 16)
-	if _, err := rand.Read(idBytes); err != nil {
+	id, err := newID()
+	if err != nil {
 		listener.Close()
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &Node{
 		Name: name, Port: listener.Addr().(*net.TCPAddr).Port,
-		Events: make(chan Event, 1024), id: hex.EncodeToString(idBytes),
+		Events: make(chan Event, 1024), id: id,
 		listener: listener, ctx: ctx, cancel: cancel,
-		peers: make(map[*peer]struct{}), seen: make(map[string]struct{}),
+		peers: make(map[*peer]struct{}), members: make(map[string]memberInfo), seen: make(map[string]struct{}),
 	}
 	go n.accept()
+	go n.refreshMembers()
 	return n, nil
+}
+
+func newID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+func validID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil
 }
 
 // Clean removes control characters so network input cannot issue terminal escape sequences.
@@ -168,7 +200,7 @@ func (n *Node) handle(conn net.Conn, address string) {
 		return
 	}
 	var hello packet
-	if err := json.Unmarshal(scanner.Bytes(), &hello); err != nil || hello.Type != "hello" || hello.ID == "" || hello.ID == n.id || hello.Port < 1 || hello.Port > 65535 || len(hello.Name) > 32 || Clean(hello.Name) == "" {
+	if err := json.Unmarshal(scanner.Bytes(), &hello); err != nil || hello.Type != "hello" || !validID(hello.ID) || hello.ID == n.id || hello.Port < 1 || hello.Port > 65535 || len(hello.Name) > 32 || Clean(hello.Name) == "" {
 		n.failed(address, errors.New("invalid peer handshake (or own address)"))
 		return
 	}
@@ -177,11 +209,30 @@ func (n *Node) handle(conn net.Conn, address string) {
 		address = net.JoinHostPort(host, strconv.Itoa(hello.Port))
 	}
 	conn.SetDeadline(time.Time{})
-	p := &peer{conn: conn, addr: address, out: make(chan packet, 64)}
+	p := &peer{conn: conn, addr: address, id: hello.ID, name: Clean(hello.Name), out: make(chan packet, maxMembers+64)}
 	n.mu.Lock()
 	n.peers[p] = struct{}{}
+	snapshot := make([]packet, 0, len(n.members))
+	for id, member := range n.members {
+		if id != p.id {
+			snapshot = append(snapshot, packet{Type: "member", ID: id, Name: member.name, Address: member.address})
+		}
+	}
 	n.mu.Unlock()
-	n.emit(Event{Kind: "peer", Address: address, Status: "connected (" + Clean(hello.Name) + ")"})
+	n.emit(Event{Kind: "peer", Address: address, Status: "connected (" + p.name + ")"})
+	n.announce(packet{Type: "member", ID: p.id, Name: p.name, Address: address}, p)
+	for _, member := range snapshot {
+		token, err := newID()
+		if err != nil {
+			continue
+		}
+		member.Token = token
+		select {
+		case p.out <- member:
+		default:
+			conn.Close()
+		}
+	}
 	writerDone := make(chan struct{})
 	stopWriter := make(chan struct{})
 	go func() {
@@ -201,13 +252,32 @@ func (n *Node) handle(conn net.Conn, address string) {
 			}
 		}
 	}()
+readLoop:
 	for scanner.Scan() {
 		var msg packet
-		if json.Unmarshal(scanner.Bytes(), &msg) != nil || msg.Type != "chat" || len(msg.ID) != 32 || len(msg.Name) > 32 || Clean(msg.Name) == "" || len(msg.Text) > maxText || Clean(msg.Text) == "" {
+		if json.Unmarshal(scanner.Bytes(), &msg) != nil {
 			break
 		}
-		msg.Name, msg.Text = Clean(msg.Name), Clean(msg.Text)
-		n.deliver(msg, p)
+		switch msg.Type {
+		case "chat":
+			if !validID(msg.ID) || len(msg.Name) > 32 || Clean(msg.Name) == "" || len(msg.Text) > maxText || Clean(msg.Text) == "" {
+				break readLoop
+			}
+			msg.Name, msg.Text = Clean(msg.Name), Clean(msg.Text)
+			n.deliver(msg, p)
+		case "member":
+			if !validID(msg.ID) || !validID(msg.Token) || len(msg.Name) > 32 || Clean(msg.Name) == "" {
+				break readLoop
+			}
+			canonical, err := Address(msg.Address)
+			if err != nil || canonical != msg.Address {
+				break readLoop
+			}
+			msg.Name = Clean(msg.Name)
+			n.announce(msg, p)
+		default:
+			break readLoop
+		}
 	}
 	conn.Close()
 	close(stopWriter)
@@ -242,25 +312,19 @@ func (n *Node) Send(text string) error {
 	if text == "" || len(text) > maxText {
 		return fmt.Errorf("message must be 1–%d bytes", maxText)
 	}
-	idBytes := make([]byte, 16)
-	if _, err := rand.Read(idBytes); err != nil {
+	id, err := newID()
+	if err != nil {
 		return err
 	}
-	n.deliver(packet{Type: "chat", ID: hex.EncodeToString(idBytes), Name: n.Name, Text: text}, nil)
+	n.deliver(packet{Type: "chat", ID: id, Name: n.Name, Text: text}, nil)
 	return nil
 }
 
 func (n *Node) deliver(msg packet, source *peer) {
 	n.mu.Lock()
-	if _, ok := n.seen[msg.ID]; ok {
+	if !n.remember("chat:" + msg.ID) {
 		n.mu.Unlock()
 		return
-	}
-	n.seen[msg.ID] = struct{}{}
-	n.seenList = append(n.seenList, msg.ID)
-	if len(n.seenList) > maxSeen {
-		delete(n.seen, n.seenList[0])
-		n.seenList = n.seenList[1:]
 	}
 	for p := range n.peers {
 		if p != source {
@@ -273,6 +337,113 @@ func (n *Node) deliver(msg packet, source *peer) {
 	}
 	n.mu.Unlock()
 	n.emit(Event{Kind: "message", Name: msg.Name, Text: msg.Text})
+}
+
+// remember must be called with n.mu held.
+func (n *Node) remember(key string) bool {
+	if _, ok := n.seen[key]; ok {
+		return false
+	}
+	n.seen[key] = struct{}{}
+	n.seenList = append(n.seenList, key)
+	if len(n.seenList) > maxSeen {
+		delete(n.seen, n.seenList[0])
+		n.seenList = n.seenList[1:]
+	}
+	return true
+}
+
+// announce forwards a newly observed member update once across the network.
+func (n *Node) announce(msg packet, source *peer) {
+	if msg.ID == n.id {
+		return
+	}
+	if msg.Token == "" {
+		var err error
+		msg.Token, err = newID()
+		if err != nil {
+			return
+		}
+	}
+	n.mu.Lock()
+	if !n.remember("member:" + msg.Token) {
+		n.mu.Unlock()
+		return
+	}
+	previous, exists := n.members[msg.ID]
+	if !exists && len(n.members) >= maxMembers {
+		n.mu.Unlock()
+		return
+	}
+	// A directly observed address takes precedence over a relayed address.
+	for p := range n.peers {
+		if exists && p.id == msg.ID && p != source {
+			msg.Name, msg.Address = previous.name, previous.address
+			break
+		}
+	}
+	changed := !exists || previous.name != msg.Name || previous.address != msg.Address
+	n.members[msg.ID] = memberInfo{name: msg.Name, address: msg.Address, seen: time.Now()}
+	for p := range n.peers {
+		if p != source {
+			select {
+			case p.out <- msg:
+			default:
+				p.conn.Close() // A stalled peer must not block the whole room.
+			}
+		}
+	}
+	n.mu.Unlock()
+	if changed {
+		n.emit(Event{Kind: "member", ID: msg.ID, Name: msg.Name, Address: msg.Address, Status: "present"})
+	}
+}
+
+func (n *Node) refreshMembers() {
+	ticker := time.NewTicker(refreshEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			n.mu.Lock()
+			neighbors := make([]*peer, 0, len(n.peers))
+			for p := range n.peers {
+				neighbors = append(neighbors, p)
+			}
+			n.mu.Unlock()
+			for _, p := range neighbors {
+				n.announce(packet{Type: "member", ID: p.id, Name: p.name, Address: p.addr}, p)
+			}
+			n.expireMembers(time.Now())
+		case <-n.ctx.Done():
+			return
+		}
+	}
+}
+
+func (n *Node) expireMembers(now time.Time) {
+	n.mu.Lock()
+	var departed []Event
+	for id, member := range n.members {
+		if now.Sub(member.seen) <= memberTTL {
+			continue
+		}
+		direct := false
+		for p := range n.peers {
+			if p.id == id {
+				direct = true
+				break
+			}
+		}
+		if !direct {
+			delete(n.members, id)
+			departed = append(departed, Event{Kind: "member", ID: id, Status: "left"})
+		}
+	}
+	n.mu.Unlock()
+	for _, event := range departed {
+		n.emit(event)
+	}
 }
 
 func (n *Node) emit(event Event) {
