@@ -14,6 +14,8 @@ Copy the resulting `termchat` binary to each Linux machine. No Go installation i
 
 Each commit pushed to `main` also creates a [GitHub release](https://github.com/neoh77/termchat/releases) with a statically linked Linux amd64 binary named `termchat`. Releases use SemVer tags: the first is `v0.1.0`, then each new release increments the patch version (`v0.1.1`, `v0.1.2`, …). Existing `build-<commit SHA>` releases do not affect this sequence. To start a new major or minor series, create a higher SemVer tag; subsequent releases increment its patch version.
 
+The status bar shows the release version (for example, `v0.1.2`). Binaries built locally with the command above show `dev` instead.
+
 ## Chat
 
 ```sh

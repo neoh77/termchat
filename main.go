@@ -15,6 +15,9 @@ import (
 	"termchat/internal/chat"
 )
 
+// The release build sets this to its SemVer tag with -ldflags.
+var version = "dev"
+
 type peerFlags []string
 
 func (p *peerFlags) String() string { return strings.Join(*p, ", ") }
@@ -36,6 +39,7 @@ type model struct {
 	order    []string
 	notice   string
 	localIPs []string
+	version  string
 }
 
 func matchingLocalIPv4(ip net.IP) string {
@@ -85,7 +89,7 @@ func newModel(n *chat.Node) model {
 	input.Prompt = "Message > "
 	input.CharLimit = 4096
 	input.Focus()
-	return model{node: n, input: input, peers: make(map[string]string), localIPs: localIPv4s()}
+	return model{node: n, input: input, peers: make(map[string]string), localIPs: localIPv4s(), version: version}
 }
 
 func (m model) waitEvent() tea.Msg {
@@ -220,7 +224,7 @@ func (m model) View() string {
 		title.Render(ansi.Truncate(local, m.width, "…")),
 		panes,
 		m.input.View(),
-		dim.Render(ansi.Truncate(status, m.width, "…")),
+		dim.Render(ansi.Truncate(m.version+" · "+status, m.width, "…")),
 		dim.Render(ansi.Truncate("Ctrl+A add peer · Enter send/connect · Esc cancel · Ctrl+Q quit", m.width, "…")),
 	}, "\n")
 }

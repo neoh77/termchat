@@ -52,3 +52,13 @@ func TestViewShowsLocalAddressAndListeningPort(t *testing.T) {
 		}
 	}
 }
+
+func TestViewKeepsVersionVisibleWithNotice(t *testing.T) {
+	m := newModel(&chat.Node{Name: "alice", Port: 8085})
+	m.width, m.height = 40, 13
+	m.notice = "connection failed: timed out"
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, version+" · connection") {
+		t.Fatalf("version is not visible with a notice: %s", view)
+	}
+}
