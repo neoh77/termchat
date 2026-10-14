@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -33,6 +35,49 @@ type model struct {
 	peers    map[string]string
 	order    []string
 	notice   string
+	localIPs []string
+}
+
+func matchingLocalIPv4(ip net.IP) string {
+	ipv4 := ip.To4()
+	if ipv4 == nil || (ipv4[0] != 10 && ipv4[0] != 192) {
+		return ""
+	}
+	return ipv4.String()
+}
+
+func localIPv4s() []string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var result []string
+	seen := make(map[string]bool)
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addresses, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, address := range addresses {
+			ip, _, err := net.ParseCIDR(address.String())
+			if err != nil {
+				continue
+			}
+			value := matchingLocalIPv4(ip)
+			if value == "" {
+				continue
+			}
+			if !seen[value] {
+				seen[value] = true
+				result = append(result, value)
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 
 func newModel(n *chat.Node) model {
@@ -40,7 +85,7 @@ func newModel(n *chat.Node) model {
 	input.Prompt = "Message > "
 	input.CharLimit = 4096
 	input.Focus()
-	return model{node: n, input: input, peers: make(map[string]string)}
+	return model{node: n, input: input, peers: make(map[string]string), localIPs: localIPv4s()}
 }
 
 func (m model) waitEvent() tea.Msg {
@@ -140,8 +185,16 @@ func (m model) View() string {
 	if m.width < 40 || m.height < 13 {
 		return "Enlarge your terminal to at least 40 columns × 13 rows.\n"
 	}
-	header := title.Render("termchat") + dim.Render(fmt.Sprintf("  %s · listening on :%d (share your IP:%d)", m.node.Name, m.node.Port, m.node.Port))
+	header := title.Render("termchat") + dim.Render(fmt.Sprintf("  %s · listening on :%d", m.node.Name, m.node.Port))
 	header = ansi.Truncate(header, m.width, "…")
+	local := "Your IP: none matching 10.* or 192.*"
+	if len(m.localIPs) > 0 {
+		addresses := make([]string, 0, len(m.localIPs))
+		for _, ip := range m.localIPs {
+			addresses = append(addresses, fmt.Sprintf("%s:%d", ip, m.node.Port))
+		}
+		local = "Your IP: " + strings.Join(addresses, ", ")
+	}
 	peerLines := make([]string, 0, len(m.order)*2+1)
 	for _, address := range m.order {
 		peerLines = append(peerLines, address, "  "+m.peers[address])
@@ -149,7 +202,7 @@ func (m model) View() string {
 	if len(peerLines) == 0 {
 		peerLines = append(peerLines, "Ctrl+A to add a peer")
 	}
-	paneHeight := m.height - 4
+	paneHeight := m.height - 5
 	var panes string
 	if m.width >= 72 {
 		panes = lipgloss.JoinHorizontal(lipgloss.Top,
@@ -164,6 +217,7 @@ func (m model) View() string {
 	}
 	return strings.Join([]string{
 		header,
+		title.Render(ansi.Truncate(local, m.width, "…")),
 		panes,
 		m.input.View(),
 		dim.Render(ansi.Truncate(status, m.width, "…")),

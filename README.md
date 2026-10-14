@@ -26,6 +26,8 @@ Each commit pushed to `main` also creates a [GitHub release](https://github.com/
 
 Messages travel both ways once connected. To add someone while running, press **Ctrl+A**, type their IP (or `IP:port`), and press **Enter**. Peers in a connected group forward messages to one another, so every member doesn't have to enter every other member's address.
 
+The TUI shows your local `10.*` or `192.*` IPv4 address and actual listening port to share with other members. If multiple matching interfaces exist, it lists their addresses; choose one reachable by your peers.
+
 | Key | Action |
 | --- | --- |
 | Enter | Send a message, or connect to the entered peer |
