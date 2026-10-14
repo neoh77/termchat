@@ -243,6 +243,7 @@ var (
 	border = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63"))
 	title  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 	dim    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	alert  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("160")).Align(lipgloss.Center)
 )
 
 func pane(label string, lines []string, width, height int) string {
@@ -316,13 +317,21 @@ func (m model) View() string {
 	if status == "" {
 		status = fmt.Sprintf("Single room · %d members", len(m.members))
 	}
+	footer := dim.Render(ansi.Truncate("Ctrl+A add peer · PgUp/PgDn members · Enter send/connect · Esc cancel · Ctrl+Q quit", m.width, "…"))
+	if m.newMessages > 0 {
+		label := "MESSAGES"
+		if m.newMessages == 1 {
+			label = "MESSAGE"
+		}
+		footer = alert.Width(m.width).Render(ansi.Truncate(fmt.Sprintf("%d NEW %s · any key clears", m.newMessages, label), m.width, "…"))
+	}
 	return strings.Join([]string{
 		header,
 		title.Render(ansi.Truncate(local, m.width, "…")),
 		panes,
 		m.input.View(),
 		dim.Render(ansi.Truncate(m.version+" · "+status, m.width, "…")),
-		dim.Render(ansi.Truncate("Ctrl+A add peer · PgUp/PgDn members · Enter send/connect · Esc cancel · Ctrl+Q quit", m.width, "…")),
+		footer,
 	}, "\n")
 }
 
