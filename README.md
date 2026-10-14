@@ -32,7 +32,7 @@ Connections you initiate (with `--peer` or Ctrl+A) automatically retry every few
 
 Type `/me waves` to send an action, displayed to everyone as `* alice waves` (using your nickname). Type `/update` to check the latest GitHub release and install its `termchat` binary if it is newer; restart termchat to use the update. This manual update requires internet access and a writable installation directory and is available for Linux amd64. Locally built `dev` binaries install the latest release when `/update` is used. The current binary is kept if the download or installation fails.
 
-The Chat pane title shows how many new messages or actions have arrived from other members since your last key interaction. Typing or using a shortcut clears the count; messages you send do not add to it.
+New messages or actions from other members show a high-contrast banner in place of the shortcut hints, as well as a count in the Chat pane title. Typing or using a shortcut clears the alert; messages you send do not add to it.
 
 The TUI shows your local `10.*` or `192.*` IPv4 address and actual listening port to share with other members. If multiple matching interfaces exist, it lists their addresses; choose one reachable by your peers.
 

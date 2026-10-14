@@ -13,16 +13,19 @@ import (
 
 func TestViewFitsTerminal(t *testing.T) {
 	for _, size := range [][2]int{{40, 13}, {65, 20}, {80, 24}, {120, 30}} {
-		m := newModel(&chat.Node{Name: "alice", Port: 8080})
-		m.width, m.height = size[0], size[1]
-		m.input.Width = m.width - len(m.input.Prompt) - 2
-		m.messages = []string{strings.Repeat("hello everyone ", 30), "latest message"}
-		m.localIPs = []string{"10.0.0.7", "192.168.1.25"}
-		m.order = []string{"192.168.1.100:8080"}
-		m.peers[m.order[0]] = "connected (bob)"
-		view := m.View()
-		if width, height := lipgloss.Size(view); width > m.width || height > m.height {
-			t.Errorf("terminal %dx%d: view is %dx%d", m.width, m.height, width, height)
+		for _, unread := range []int{0, 1, 123456789} {
+			m := newModel(&chat.Node{Name: "alice", Port: 8080})
+			m.width, m.height = size[0], size[1]
+			m.input.Width = m.width - len(m.input.Prompt) - 2
+			m.messages = []string{strings.Repeat("hello everyone ", 30), "latest message"}
+			m.localIPs = []string{"10.0.0.7", "192.168.1.25"}
+			m.order = []string{"192.168.1.100:8080"}
+			m.peers[m.order[0]] = "connected (bob)"
+			m.newMessages = unread
+			view := m.View()
+			if width, height := lipgloss.Size(view); width > m.width || height > m.height {
+				t.Errorf("terminal %dx%d with %d new messages: view is %dx%d", m.width, m.height, unread, width, height)
+			}
 		}
 	}
 }
@@ -154,6 +157,9 @@ func TestNewMessageCount(t *testing.T) {
 	if m.newMessages != 2 || !strings.Contains(ansi.Strip(m.View()), "Chat (2 new)") {
 		t.Fatalf("expected two new messages: count %d, view %s", m.newMessages, m.View())
 	}
+	if footer := strings.Split(strings.TrimSuffix(ansi.Strip(m.View()), "\n"), "\n"); !strings.Contains(footer[len(footer)-1], "2 NEW MESSAGES · any key clears") {
+		t.Fatalf("new-message banner is missing: %s", m.View())
+	}
 	for _, event := range []tea.Msg{
 		tea.WindowSizeMsg{Width: 80, Height: 24},
 		networkEvent{Kind: "peer", Address: "127.0.0.1:8085", Status: "connected (bob)"},
@@ -169,9 +175,15 @@ func TestNewMessageCount(t *testing.T) {
 	if m.newMessages != 0 || strings.Contains(ansi.Strip(m.View()), "Chat (2 new)") {
 		t.Fatalf("key interaction did not clear new messages: count %d, view %s", m.newMessages, m.View())
 	}
+	if view := ansi.Strip(m.View()); strings.Contains(view, "NEW MESSAGES") || !strings.Contains(view, "Ctrl+A add peer") {
+		t.Fatalf("shortcut hints did not return after clearing the banner: %s", view)
+	}
 	updated, _ = m.Update(networkEvent{Kind: "message", Name: "bob", Text: "again"})
 	m = updated.(model)
 	if m.newMessages != 1 || !strings.Contains(ansi.Strip(m.View()), "Chat (1 new)") {
 		t.Fatalf("new messages did not resume counting: count %d, view %s", m.newMessages, m.View())
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "1 NEW MESSAGE · any key clears") {
+		t.Fatalf("single-message banner is missing: %s", view)
 	}
 }
