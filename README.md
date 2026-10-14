@@ -12,6 +12,8 @@ CGO_ENABLED=0 go build -trimpath -o termchat .
 
 Copy the resulting `termchat` binary to each Linux machine. No Go installation is needed to run the binary.
 
+Each commit pushed to `main` also creates a [GitHub release](https://github.com/neoh77/termchat/releases) with a statically linked Linux amd64 binary named `termchat-linux-amd64`. Release tags are `build-<commit SHA>`.
+
 ## Chat
 
 ```sh
